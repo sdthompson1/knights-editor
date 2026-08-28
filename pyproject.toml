@@ -1,0 +1,47 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "knights-editor"
+description = "A tool for creating and editing mods for Knights, the multiplayer dungeon game."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "GPL-2.0-or-later"
+license-files = ["LICENSE"]
+authors = [
+    { name = "Stephen Thompson" },
+]
+keywords = ["knights", "game", "mod", "editor"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: X11 Applications :: Qt",
+    "Intended Audience :: End Users/Desktop",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Topic :: Games/Entertainment",
+]
+dynamic = ["version"]
+dependencies = [
+    # Full PySide6 (not PySide6-Essentials): QtMultimedia lives in the
+    # Addons package and is needed for sound playback.
+    "PySide6>=6.11,<7",
+    "lupa>=2.6,<3",
+]
+
+[project.urls]
+Homepage = "https://www.knightsgame.org.uk/"
+"Knights on GitHub" = "https://github.com/sdthompson1/knights"
+
+[project.scripts]
+knights-editor = "knights_editor.main:main"
+
+[tool.setuptools]
+packages = ["knights_editor"]
+
+[tool.setuptools.dynamic]
+version = { attr = "knights_editor.__version__" }
+
+[tool.setuptools.package-data]
+knights_editor = ["segtest_template/**/*"]
