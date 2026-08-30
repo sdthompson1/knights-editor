@@ -5,7 +5,7 @@ from enum import Enum, auto
 
 from PySide6.QtWidgets import QWidget, QAbstractScrollArea
 from PySide6.QtGui import QPainter, QColor, QPen, QBrush
-from PySide6.QtCore import Qt, QRect, Signal
+from PySide6.QtCore import Qt, Signal
 
 from knights_editor.models import Segment, TileEntry, Room, Switch
 from knights_editor.graphics_cache import TilePixmapCache, TILE_SIZE
@@ -238,12 +238,6 @@ class MapWidget(QWidget):
         seg = self.segment
         return not (0 <= col < seg.width and 0 <= row < seg.height)
 
-    def _tile_rect(self, col: int, row: int) -> QRect:
-        """Widget-coordinate rectangle covering data tile (col, row),
-        including the 1px hover outline drawn around it."""
-        s = self._tile_px()
-        return QRect((col + RING) * s, (row + RING) * s, s + 1, s + 1)
-
     def _hovered_room_index(self, seg: Segment) -> int:
         """Return the index of the room under the mouse, or -1."""
         if not self._hover_pos:
@@ -424,7 +418,7 @@ class MapWidget(QWidget):
                 self._push_undo()
                 self._paint_undo_pushed = True
             self.segment.data[row][col] = tile_num
-            self.update(self._tile_rect(col, row))
+            self.update()
             self.segment_modified.emit()
 
     def paintEvent(self, event):
@@ -449,8 +443,8 @@ class MapWidget(QWidget):
         painter.drawRect(RING * s, RING * s, seg.width * s, seg.height * s)
         painter.translate(RING * s, RING * s)
 
-        # Draw tiles - only those touching the area being repainted, so
-        # that partial updates (hover moves, painted tiles) stay cheap.
+        # Draw tiles - only those touching the area being repainted. For a
+        # large segment in a scroll area, this is just the visible part.
         clip = event.rect()
         col0 = max(0, (clip.left() - RING * s) // s)
         col1 = min(seg.width - 1, (clip.right() - RING * s) // s)
@@ -662,6 +656,8 @@ class MapWidget(QWidget):
                 tile = self.brush_tiles.get(button)
                 if tile is not None:
                     self._paint_tile(col, row, tile)
+                # The brush preview is hidden while the mouse is pressed
+                self.update()
 
         elif self.edit_mode == EditMode.ROOMS:
             if event.button() == Qt.MouseButton.LeftButton:
@@ -805,7 +801,9 @@ class MapWidget(QWidget):
             self.update()
             self._emit_hover_info()
 
-        self._mouse_pressed = None
+        if self._mouse_pressed is not None:
+            self._mouse_pressed = None
+            self.update()  # brush preview reappears in Paint mode
         self._paint_undo_pushed = False
 
     def mouseMoveEvent(self, event):
@@ -816,8 +814,7 @@ class MapWidget(QWidget):
         # Nothing drawn depends on the mouse position within a tile, so a
         # move that stays on the same tile needs no repaint at all.
         hover_changed = pos != prev
-        # Set when an edit or drag altered something beyond the hovered
-        # tile (a full repaint is needed).
+        # Set when an edit or drag altered something on the map.
         dirty = False
 
         if pos and self.segment:
@@ -830,7 +827,7 @@ class MapWidget(QWidget):
             if self.edit_mode == EditMode.PAINT and self._mouse_pressed:
                 tile = self.brush_tiles.get(self._mouse_pressed)
                 if tile is not None:
-                    self._paint_tile(col, row, tile)  # updates its own tile
+                    self._paint_tile(col, row, tile)  # repaints if changed
 
             elif self.edit_mode == EditMode.ROOMS and self._drag_start:
                 if self._drag_end != (col, row):
@@ -857,14 +854,11 @@ class MapWidget(QWidget):
 
         if hover_changed:
             self._emit_hover_info()
-        if dirty or (hover_changed and self.edit_mode != EditMode.PAINT):
-            # Room / switch hover highlights can span many tiles.
+        if dirty or hover_changed:
+            # Repaint the whole widget; Qt clips this to the visible part
+            # of the scroll area, and paintEvent only draws tiles within
+            # that, so this stays cheap even for large segments.
             self.update()
-        elif hover_changed:
-            # Paint mode: only the hover outline and brush preview move.
-            for p in (prev, pos):
-                if p is not None:
-                    self.update(self._tile_rect(*p))
 
     def leaveEvent(self, event):
         self._hover_pos = None
