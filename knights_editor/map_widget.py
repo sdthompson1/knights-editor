@@ -7,7 +7,7 @@ from PySide6.QtWidgets import QWidget, QAbstractScrollArea
 from PySide6.QtGui import QPainter, QColor, QPen, QBrush
 from PySide6.QtCore import Qt, Signal
 
-from knights_editor.models import Segment, TileEntry, Room, Switch
+from knights_editor.models import Segment, TileEntry, Room, Switch, MapBlock
 from knights_editor.graphics_cache import TilePixmapCache, TILE_SIZE
 from knights_editor.room_check import rooms_overlap, RoomProblem, ProblemKind, problems_at
 from knights_editor.zooming import next_level
@@ -29,11 +29,26 @@ RING_HATCH_COLOR = QColor(170, 170, 119)
 # Undo snapshots kept per map (each is a deep copy of the segment).
 MAX_UNDO = 200
 
+# The block most recently cut or copied in Select mode. Shared by every
+# map, so that it can be pasted into another segment or another file.
+_clipboard: MapBlock | None = None
+
+
+def clipboard_block() -> MapBlock | None:
+    """The block that a paste would insert, or None if nothing has been
+    cut or copied yet."""
+    return _clipboard
+
 
 class EditMode(Enum):
+    SELECT = auto()
     PAINT = auto()
     SWITCHES = auto()
     ROOMS = auto()
+
+
+# Rectangle in data tile coords: (col, row, w, h)
+Rect = tuple[int, int, int, int]
 
 
 class MapWidget(QWidget):
@@ -50,6 +65,11 @@ class MapWidget(QWidget):
     switch_hovered = Signal(int)    # switch index under mouse in Switches mode (-1 if none)
     switch_selected = Signal(int)   # switch index (-1 if none)
     target_picked = Signal(int, int)  # col, row of picked target tile
+    # The rectangle selected (or being dragged out) in Select mode, as
+    # data tile coords (col, row, w, h); w == 0 means none.
+    selection_changed = Signal(int, int, int, int)
+    # Whether a paste is waiting for its click (see start_paste).
+    pasting_changed = Signal(bool)
     segment_modified = Signal()
     zoom_changed = Signal(float)    # zoom factor (1.0 = 100%)
 
@@ -59,7 +79,7 @@ class MapWidget(QWidget):
         self.tile_table: dict[int, TileEntry] = {}
         self.tile_cache: TilePixmapCache | None = None
         self.zoom = 1.0
-        self.edit_mode = EditMode.PAINT
+        self.edit_mode = EditMode.SELECT
         self.brush_tiles: dict[int, int] = {}  # button -> tile_number
         self._mouse_pressed: int | None = None  # button currently held
         self._hover_pos: tuple[int, int] | None = None
@@ -84,6 +104,12 @@ class MapWidget(QWidget):
         # to release) has been pushed; one snapshot covers the whole stroke.
         self._paint_undo_pushed: bool = False
 
+        # Select mode: the selected rectangle (None if nothing is
+        # selected), and whether the clipboard block is following the
+        # mouse waiting to be stamped down by a click (see start_paste).
+        self._selection: Rect | None = None
+        self._pasting: bool = False
+
         # Room check results, drawn (and reported on hover) in Rooms mode
         # when show_problems is set. See set_problems.
         self.problems: list[RoomProblem] = []
@@ -101,6 +127,8 @@ class MapWidget(QWidget):
         self._selected_switch = -1
         self._undo_stack.clear()
         self._redo_stack.clear()
+        self.cancel_paste()
+        self.clear_selection()
         self._update_size()
         self.update()
 
@@ -207,6 +235,8 @@ class MapWidget(QWidget):
             # no longer exists); it is re-resolved on the next mouse move.
             self._hover_pos = None
             self._update_size()
+            # The selection may now stick out of the segment
+            self._set_selection(self._clip_to_map(self._selection))
         self._selected_switch = next(
             (i for i, s in enumerate(restored.switches)
              if (s.x, s.y) == sel_pos), -1)
@@ -250,16 +280,137 @@ class MapWidget(QWidget):
                 return i
         return -1
 
-    def _drag_room(self) -> Room | None:
-        """The room rectangle currently being dragged out, or None."""
+    def _drag_rect(self) -> Rect | None:
+        """The rectangle currently being dragged out (Rooms and Select
+        modes), in data tile coords, or None."""
         if not (self._drag_start and self._drag_end):
             return None
         x1 = min(self._drag_start[0], self._drag_end[0])
         y1 = min(self._drag_start[1], self._drag_end[1])
         x2 = max(self._drag_start[0], self._drag_end[0])
         y2 = max(self._drag_start[1], self._drag_end[1])
+        return (x1, y1, x2 - x1 + 1, y2 - y1 + 1)
+
+    def _drag_room(self) -> Room | None:
+        """The room rectangle currently being dragged out, or None."""
+        rect = self._drag_rect()
+        if rect is None:
+            return None
+        x, y, w, h = rect
         # Convert data coords to room coords (+1 offset)
-        return Room(x1 + 1, y1 + 1, x2 - x1 + 1, y2 - y1 + 1)
+        return Room(x + 1, y + 1, w, h)
+
+    # --- Select mode: selection, cut/copy/paste ---
+
+    @property
+    def selection(self) -> Rect | None:
+        """The selected rectangle in data tile coords (col, row, w, h),
+        which may extend onto the wall ring, or None."""
+        return self._selection
+
+    @property
+    def pasting(self) -> bool:
+        """True while the clipboard block follows the mouse, waiting for
+        a click to stamp it down (see start_paste)."""
+        return self._pasting
+
+    def _clip_to_map(self, rect: Rect | None) -> Rect | None:
+        """`rect` cut down to the segment plus its wall ring; None if
+        nothing is left (or there is no segment)."""
+        if rect is None or not self.segment:
+            return None
+        x, y, w, h = rect
+        x1 = max(x, -RING)
+        y1 = max(y, -RING)
+        x2 = min(x + w, self.segment.width + RING)
+        y2 = min(y + h, self.segment.height + RING)
+        if x1 >= x2 or y1 >= y2:
+            return None
+        return (x1, y1, x2 - x1, y2 - y1)
+
+    def _set_selection(self, rect: Rect | None):
+        if rect != self._selection:
+            self._selection = rect
+            self.update()
+        # Reported even if unchanged: the caller may be ending a drag,
+        # during which the drag rectangle was reported instead.
+        self._emit_hover_info()
+
+    def clear_selection(self):
+        self._set_selection(None)
+
+    def copy_selection(self) -> bool:
+        """Copy the selected rectangle (tiles, switches and the rooms
+        entirely inside it) to the clipboard. Returns False if there is
+        no selection."""
+        global _clipboard
+        if not self.segment or self._selection is None:
+            return False
+        _clipboard = self.segment.extract(*self._selection)
+        return True
+
+    def cut_selection(self, fill: int) -> bool:
+        """Copy the selected rectangle to the clipboard, then clear it
+        (see clear_selection_contents)."""
+        if not self.copy_selection():
+            return False
+        self.clear_selection_contents(fill)
+        return True
+
+    def clear_selection_contents(self, fill: int) -> bool:
+        """Set the selected rectangle's tiles to `fill` and delete the
+        switches on them and the rooms entirely inside it, as an undoable
+        edit. The selection itself stays. Returns False if there is no
+        selection."""
+        if not self.segment or self._selection is None:
+            return False
+        self._push_undo()
+        self.segment.clear_rect(*self._selection, fill)
+        self._selected_switch = -1
+        self.update()
+        self.segment_modified.emit()
+        return True
+
+    def start_paste(self) -> bool:
+        """Begin a paste: the clipboard block follows the mouse (drawn
+        translucently, its top-left tile at the pointer) until a left
+        click stamps it down, or a right click or Escape cancels. Only
+        meaningful in Select mode. Returns False if the clipboard is
+        empty or there is no segment."""
+        if _clipboard is None or not self.segment:
+            return False
+        if not self._pasting:
+            self._pasting = True
+            self.setCursor(Qt.CursorShape.CrossCursor)
+            self.pasting_changed.emit(True)
+            self.update()
+        return True
+
+    def cancel_paste(self):
+        if self._pasting:
+            self._pasting = False
+            self.setCursor(Qt.CursorShape.ArrowCursor)
+            self.pasting_changed.emit(False)
+            self.update()
+
+    def _stamp(self, col: int, row: int):
+        """Finish a paste by stamping the clipboard block down with its
+        top-left tile at (col, row). The pasted area becomes the
+        selection."""
+        block = _clipboard
+        if block is None or not self.segment:
+            self.cancel_paste()
+            return
+        self._push_undo()
+        # As when dragging out a room, existing rooms that the pasted
+        # ones would overlap give way to them.
+        self.segment.paste(block, col, row, room_conflict=rooms_overlap)
+        self._selected_switch = -1
+        self.cancel_paste()
+        self._set_selection(
+            self._clip_to_map((col, row, block.width, block.height)))
+        self.update()
+        self.segment_modified.emit()
 
     def _emit_hover_info(self):
         """Report what is under the mouse for the current edit mode: the
@@ -286,6 +437,11 @@ class MapWidget(QWidget):
             self.problem_hovered.emit("; ".join(p.message for p in problems))
         elif self.edit_mode == EditMode.SWITCHES:
             self.switch_hovered.emit(self._hovered_switch_index())
+        elif self.edit_mode == EditMode.SELECT:
+            # The rectangle being dragged out takes precedence over the
+            # existing selection (which it is about to replace)
+            rect = self._drag_rect() or self._selection
+            self.selection_changed.emit(*(rect or (0, 0, 0, 0)))
 
     def _switch_at(self, col: int, row: int) -> int:
         """Return the index of the switch at (col, row), or -1."""
@@ -563,16 +719,57 @@ class MapWidget(QWidget):
                 painter.setOpacity(1.0)
 
         # Draw drag rectangle (rooms mode)
-        if self._drag_start and self._drag_end and self.edit_mode == EditMode.ROOMS:
-            x1 = min(self._drag_start[0], self._drag_end[0])
-            y1 = min(self._drag_start[1], self._drag_end[1])
-            x2 = max(self._drag_start[0], self._drag_end[0])
-            y2 = max(self._drag_start[1], self._drag_end[1])
+        drag = self._drag_rect()
+        if drag and self.edit_mode == EditMode.ROOMS:
+            x, y, w, h = drag
             painter.setPen(QPen(QColor(255, 255, 255), 2))
             painter.setBrush(Qt.BrushStyle.NoBrush)
-            painter.drawRect(x1 * s, y1 * s, (x2 - x1 + 1) * s, (y2 - y1 + 1) * s)
+            painter.drawRect(x * s, y * s, w * s, h * s)
+
+        if self.edit_mode == EditMode.SELECT:
+            # The selection (or the rectangle about to replace it)
+            rect = drag or self._selection
+            if rect:
+                self._draw_selection_rect(painter, s, rect)
+            # Paste preview: the clipboard block under the mouse
+            block = _clipboard
+            if self._pasting and self._hover_pos and block is not None:
+                self._draw_paste_preview(painter, s, block, *self._hover_pos)
 
         painter.end()
+
+    def _draw_selection_rect(self, painter: QPainter, s: int, rect: Rect):
+        """Outline a rectangle (data tile coords) in black and white
+        dashes, with a light wash over it, so it shows on any tiles."""
+        x, y, w, h = rect
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(255, 255, 255, 40))
+        painter.drawRect(x * s, y * s, w * s, h * s)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.setPen(QPen(QColor(0, 0, 0), 2))
+        painter.drawRect(x * s + 1, y * s + 1, w * s - 2, h * s - 2)
+        painter.setPen(QPen(QColor(255, 255, 255), 2, Qt.PenStyle.DashLine))
+        painter.drawRect(x * s + 1, y * s + 1, w * s - 2, h * s - 2)
+
+    def _draw_paste_preview(self, painter: QPainter, s: int, block: MapBlock,
+                            col: int, row: int):
+        """Draw `block` translucently with its top-left tile at (col, row),
+        as it would be pasted there: tiles off the data area are not
+        shown (they would be dropped), but the outline shows the whole
+        block, so a partly-clipped paste is apparent."""
+        seg = self.segment
+        painter.setOpacity(0.5)
+        for r, tile_row in enumerate(block.tiles):
+            for c, tile in enumerate(tile_row):
+                dc, dr = col + c, row + r
+                if tile is not None and 0 <= dc < seg.width and 0 <= dr < seg.height:
+                    pm = self.tile_cache.get_tile_pixmap(tile)
+                    painter.drawPixmap(dc * s, dr * s, s, s, pm)
+        painter.setOpacity(1.0)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.setPen(QPen(QColor(255, 255, 255, 200), 2))
+        painter.drawRect(col * s + 1, row * s + 1,
+                         block.width * s - 2, block.height * s - 2)
 
     def _draw_problems(self, painter: QPainter, s: int):
         """Draw the room check markers (painter origin at data tile (0, 0)):
@@ -633,16 +830,37 @@ class MapWidget(QWidget):
                                (area.verticalScrollBar(), pos.y())):
                 bar.setValue(round(coord * ratio - (coord - bar.value())))
 
+    def _include_ring(self) -> bool:
+        """Whether the wall ring is clickable in the current mode: it is
+        where rooms are placed and selections may extend onto it."""
+        return self.edit_mode in (EditMode.ROOMS, EditMode.SELECT)
+
     def mousePressEvent(self, event):
         self._pick_just_finished = False
         pos = self._tile_at(event.position().toPoint(),
-                            include_ring=(self.edit_mode == EditMode.ROOMS))
+                            include_ring=self._include_ring())
         if not pos or not self.segment:
             return
 
         col, row = pos
 
-        if self.edit_mode == EditMode.PAINT:
+        if self.edit_mode == EditMode.SELECT:
+            if event.button() == Qt.MouseButton.LeftButton:
+                if self._pasting:
+                    self._stamp(col, row)
+                else:
+                    self._drag_start = (col, row)
+                    self._drag_end = (col, row)
+                    self._mouse_pressed = 1
+                    self.update()
+                    self._emit_hover_info()
+            elif event.button() == Qt.MouseButton.RightButton:
+                if self._pasting:
+                    self.cancel_paste()
+                else:
+                    self.clear_selection()
+
+        elif self.edit_mode == EditMode.PAINT:
             button = BRUSH_BUTTONS.get(event.button())
             if button is None:
                 return
@@ -801,14 +1019,31 @@ class MapWidget(QWidget):
             self.update()
             self._emit_hover_info()
 
+        elif self.edit_mode == EditMode.SELECT:
+            rect = self._drag_rect()
+            self._drag_start = None
+            self._drag_end = None
+            if rect is not None:
+                self._set_selection(rect)
+
         if self._mouse_pressed is not None:
             self._mouse_pressed = None
             self.update()  # brush preview reappears in Paint mode
         self._paint_undo_pushed = False
 
+    def keyPressEvent(self, event):
+        if self.edit_mode == EditMode.SELECT:
+            if event.key() == Qt.Key.Key_Escape:
+                if self._pasting:
+                    self.cancel_paste()
+                else:
+                    self.clear_selection()
+                return
+        super().keyPressEvent(event)
+
     def mouseMoveEvent(self, event):
         pos = self._tile_at(event.position().toPoint(),
-                            include_ring=(self.edit_mode == EditMode.ROOMS))
+                            include_ring=self._include_ring())
         prev = self._hover_pos
         self._hover_pos = pos
         # Nothing drawn depends on the mouse position within a tile, so a
@@ -829,7 +1064,8 @@ class MapWidget(QWidget):
                 if tile is not None:
                     self._paint_tile(col, row, tile)  # repaints if changed
 
-            elif self.edit_mode == EditMode.ROOMS and self._drag_start:
+            elif (self.edit_mode in (EditMode.ROOMS, EditMode.SELECT)
+                    and self._drag_start):
                 if self._drag_end != (col, row):
                     self._drag_end = (col, row)
                     dirty = True

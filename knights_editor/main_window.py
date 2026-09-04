@@ -308,6 +308,27 @@ class MainWindow(QMainWindow):
 
         edit_menu.addSeparator()
 
+        # Text editors handle these keys themselves when focused (they
+        # override the shortcuts); the actions reach them via the menu,
+        # and reach segment editors' map selections either way.
+        # (Mnemonics chosen to avoid the search actions' T and P.)
+        cut_action = QAction("&Cut", self)
+        cut_action.setShortcut(QKeySequence.StandardKey.Cut)
+        cut_action.triggered.connect(self._cut)
+        edit_menu.addAction(cut_action)
+
+        copy_action = QAction("C&opy", self)
+        copy_action.setShortcut(QKeySequence.StandardKey.Copy)
+        copy_action.triggered.connect(self._copy)
+        edit_menu.addAction(copy_action)
+
+        paste_action = QAction("Pa&ste", self)
+        paste_action.setShortcut(QKeySequence.StandardKey.Paste)
+        paste_action.triggered.connect(self._paste)
+        edit_menu.addAction(paste_action)
+
+        edit_menu.addSeparator()
+
         find_action = QAction("&Find...", self)
         find_action.setShortcut(QKeySequence.StandardKey.Find)
         find_action.triggered.connect(self._find)
@@ -1449,6 +1470,21 @@ class MainWindow(QMainWindow):
         editor = self._current_editor()
         if editor and hasattr(editor, 'redo'):
             editor.redo()
+
+    def _cut(self):
+        editor = self._current_editor()
+        if editor and hasattr(editor, 'cut'):
+            editor.cut()
+
+    def _copy(self):
+        editor = self._current_editor()
+        if editor and hasattr(editor, 'copy'):
+            editor.copy()
+
+    def _paste(self):
+        editor = self._current_editor()
+        if editor and hasattr(editor, 'paste'):
+            editor.paste()
 
     def _find(self):
         editor = self._current_editor()

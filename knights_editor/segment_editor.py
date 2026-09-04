@@ -8,9 +8,10 @@ from PySide6.QtWidgets import (
     QApplication, QSizePolicy, QInputDialog, QCheckBox, QMenu, QSpinBox,
 )
 from PySide6.QtCore import Qt, Signal, QTimer
+from PySide6.QtGui import QShortcut, QKeySequence
 
 from knights_editor.models import Segment, TileEntry, Switch, SwitchFunc, MIN_SEGMENT_SIZE
-from knights_editor.map_widget import MapWidget, EditMode
+from knights_editor.map_widget import MapWidget, EditMode, clipboard_block
 from knights_editor.auto_rooms import auto_rooms
 from knights_editor.room_check import check_rooms, RoomProblem
 from knights_editor.config import get_show_room_problems, set_show_room_problems
@@ -115,6 +116,12 @@ class SegmentEditor(QWidget):
         self.map_widget.switch_selected.connect(self._on_switch_selected)
         self.map_widget.segment_modified.connect(self._on_segment_modified)
         self.map_widget.target_picked.connect(self._on_target_picked)
+        self.map_widget.selection_changed.connect(self._on_selection_changed)
+        self.map_widget.pasting_changed.connect(self._on_pasting_changed)
+        # Delete clears the selected area (when the map has the focus)
+        QShortcut(QKeySequence(Qt.Key.Key_Delete), self.map_widget,
+                  self.clear_selection,
+                  context=Qt.ShortcutContext.WidgetShortcut)
 
         map_scroll = QScrollArea()
         map_scroll.setWidget(self.map_widget)
@@ -124,9 +131,10 @@ class SegmentEditor(QWidget):
         # Mode buttons
         mode_bar = QHBoxLayout()
         self.mode_group = QButtonGroup(self)
-        for mode, label in [(EditMode.PAINT, "Paint"), (EditMode.SWITCHES, "Switches"), (EditMode.ROOMS, "Rooms")]:
+        for mode, label in [(EditMode.SELECT, "Select"), (EditMode.PAINT, "Paint"),
+                            (EditMode.SWITCHES, "Switches"), (EditMode.ROOMS, "Rooms")]:
             btn = QRadioButton(label)
-            if mode == EditMode.PAINT:
+            if mode == self.map_widget.edit_mode:
                 btn.setChecked(True)
             self.mode_group.addButton(btn, mode.value)
             mode_bar.addWidget(btn)
@@ -150,6 +158,9 @@ class SegmentEditor(QWidget):
         self.tile_palette.set_tile_table(self.tile_table, self.tile_cache)
         self.tile_palette.tile_selected.connect(self._on_tile_selected)
         self.tile_palette.tile_hovered.connect(self._on_palette_tile_hovered)
+        # Brush outlines are Paint-only (see _on_mode_changed)
+        self.tile_palette.show_selection = (
+            self.map_widget.edit_mode == EditMode.PAINT)
 
         palette_scroll = QScrollArea()
         palette_scroll.setWidget(self.tile_palette)
@@ -206,6 +217,38 @@ class SegmentEditor(QWidget):
         # Only the current mode's panels are shown; the others are hidden,
         # which also removes them from the layout (see _show_mode_page).
         self._mode_pages: dict[EditMode, list[QWidget]] = {}
+
+        # Select panel
+        select_box = QGroupBox("Select")
+        self._mode_pages.setdefault(EditMode.SELECT, []).append(select_box)
+        right_layout.addWidget(select_box)
+        select_layout = QVBoxLayout(select_box)
+        select_help = QLabel(
+            "Drag to select a rectangular area, then use the Cut, Copy, "
+            "Paste or Clear buttons below.")
+        select_help.setWordWrap(True)
+        select_layout.addWidget(select_help)
+        select_grid = QGridLayout()
+        self.btn_cut = QPushButton("Cut")
+        self.btn_copy = QPushButton("Copy")
+        self.btn_paste = QPushButton("Paste")
+        self.btn_clear_sel = QPushButton("Clear")
+        self.btn_clear_sel.setToolTip(
+            "Replace the selected area with plain floor, deleting its "
+            "switches and rooms (Delete key).")
+        select_grid.addWidget(self.btn_cut, 0, 0)
+        select_grid.addWidget(self.btn_copy, 0, 1)
+        select_grid.addWidget(self.btn_paste, 1, 0)
+        select_grid.addWidget(self.btn_clear_sel, 1, 1)
+        select_layout.addLayout(select_grid)
+        self.btn_cut.clicked.connect(self.cut)
+        self.btn_copy.clicked.connect(self.copy)
+        self.btn_paste.clicked.connect(self.paste)
+        self.btn_clear_sel.clicked.connect(self.clear_selection)
+        # Pieces of the Select-mode hover status line (see _update_select_status)
+        self._selection_text = ""
+        self._hovered_tile_text = ""
+        self._update_selection_buttons()
 
         # Room check (Rooms mode): refreshed on every change. Shows only a
         # problem count; the problems themselves are marked on the map
@@ -311,7 +354,7 @@ class SegmentEditor(QWidget):
         self.btn_delete_all_rooms.clicked.connect(self._delete_all_rooms)
         rooms_layout.addWidget(self.btn_delete_all_rooms)
 
-        self._show_mode_page(EditMode.PAINT)
+        self._show_mode_page(self.map_widget.edit_mode)
 
         self._set_switch_buttons_enabled(False)
 
@@ -431,6 +474,35 @@ class SegmentEditor(QWidget):
     def redo(self):
         self._pending_func_name = None
         self.map_widget.redo()
+
+    # --- Cut/copy/paste of map areas (Select mode) ---
+
+    def copy(self):
+        """Copy the selected area of the map to the clipboard."""
+        self.map_widget.copy_selection()
+
+    def cut(self):
+        """Copy the selected area of the map to the clipboard, then clear
+        it (see clear_selection)."""
+        fill = self.resize_fill_tile()
+        if fill is not None:
+            self.map_widget.cut_selection(fill)
+
+    def clear_selection(self):
+        """Replace the selected area's tiles with the default floor tile
+        and delete its switches and rooms."""
+        fill = self.resize_fill_tile()
+        if fill is not None:
+            self.map_widget.clear_selection_contents(fill)
+
+    def paste(self):
+        """Start pasting the clipboard block: switch to Select mode, if
+        not there already, and let the user click where it should go."""
+        if clipboard_block() is None or not self.map_widget.segment:
+            return
+        self.mode_group.button(EditMode.SELECT.value).setChecked(True)
+        self.map_widget.start_paste()
+        self.map_widget.setFocus()  # so that Escape cancels
 
     def default_fill_tile(self) -> int | None:
         """Tile number to fill new segments with (see module-level
@@ -644,9 +716,13 @@ class SegmentEditor(QWidget):
         self.tile_palette.update()
 
     def _on_map_tile_hovered(self, tile_num: int):
-        if self.map_widget.edit_mode != EditMode.PAINT:
-            return  # status line shows rooms/switches in the other modes
-        self._show_tile_info(tile_num)
+        mode = self.map_widget.edit_mode
+        if mode == EditMode.PAINT:
+            self._show_tile_info(tile_num)
+        elif mode == EditMode.SELECT:
+            self._hovered_tile_text = self._tile_info_text(tile_num)
+            self._update_select_status()
+        # The status line shows rooms/switches in the other modes
 
     def _on_palette_tile_hovered(self, tile_num: int):
         # The palette describes its tiles in every mode (only the
@@ -654,27 +730,60 @@ class SegmentEditor(QWidget):
         self._show_tile_info(tile_num)
 
     def _show_tile_info(self, tile_num: int):
+        self.hover_status.setText(self._tile_info_text(tile_num))
+
+    def _tile_info_text(self, tile_num: int) -> str:
+        """Describe a tile for the status line, e.g. "Tile 12  (t_floor1)";
+        "" for a negative (no tile) number."""
         if tile_num < 0:
-            self.hover_status.setText("")
+            return ""
+        entry = self.tile_table.get(tile_num)
+        info = f"Tile {tile_num}"
+        if entry and entry.tiles:
+            names = []
+            for t in entry.tiles:
+                if t.name:
+                    names.append(t.name)
+                elif t.graphic:
+                    # Fall back to the graphic's filename
+                    name = t.graphic.filename
+                    if '/' in name:
+                        name = name.rsplit('/', 1)[1]
+                    if name.endswith('.bmp'):
+                        name = name[:-4]
+                    names.append(name)
+            if names:
+                info += f"  ({', '.join(names)})"
+        return info
+
+    def _on_selection_changed(self, x: int, y: int, w: int, h: int):
+        self._selection_text = f"Selection: ({x}, {y})  {w} x {h}" if w > 0 else ""
+        self._update_selection_buttons()
+        self._update_select_status()
+
+    def _on_pasting_changed(self, pasting: bool):
+        self._update_select_status()
+
+    def _update_selection_buttons(self):
+        has_sel = self.map_widget.selection is not None
+        for btn in (self.btn_cut, self.btn_copy, self.btn_clear_sel):
+            btn.setEnabled(has_sel)
+        # Paste stays enabled: the clipboard is shared between files, so
+        # it can be filled by another tab without this one hearing of it
+
+    def _update_select_status(self):
+        """Select-mode status line: what a paste is waiting for, or the
+        selection (or the rectangle being dragged out) and the hovered
+        tile, e.g. "Selection: (2, 3)  4 x 5  —  Tile 12  (t_floor1)"."""
+        if self.map_widget.pasting:
+            block = clipboard_block()
+            size = f"{block.width} x {block.height}" if block else ""
+            text = (f"Click to paste ({size}) with its top-left corner at "
+                    "the pointer; right-click or Escape to cancel.")
         else:
-            entry = self.tile_table.get(tile_num)
-            info = f"Tile {tile_num}"
-            if entry and entry.tiles:
-                names = []
-                for t in entry.tiles:
-                    if t.name:
-                        names.append(t.name)
-                    elif t.graphic:
-                        # Fall back to the graphic's filename
-                        name = t.graphic.filename
-                        if '/' in name:
-                            name = name.rsplit('/', 1)[1]
-                        if name.endswith('.bmp'):
-                            name = name[:-4]
-                        names.append(name)
-                if names:
-                    info += f"  ({', '.join(names)})"
-            self.hover_status.setText(info)
+            parts = [t for t in (self._selection_text, self._hovered_tile_text) if t]
+            text = "  —  ".join(parts)
+        self.hover_status.setText(text)
 
     def _on_room_hovered(self, x: int, y: int, w: int, h: int):
         self._hovered_room_text = f"Room: ({x}, {y})  {w} x {h}" if w > 0 else ""
@@ -861,7 +970,10 @@ class SegmentEditor(QWidget):
             self._pending_func_name = None
             self._on_switch_selected(-1)
             self._show_mode_page(mode)
+            self.map_widget.cancel_paste()
+            self.map_widget.clear_selection()
             self._hovered_room_text = self._hovered_problem_text = ""
+            self._selection_text = self._hovered_tile_text = ""
             self.hover_status.setText("")
             self.tile_palette.show_selection = (mode == EditMode.PAINT)
             self.tile_palette.update()

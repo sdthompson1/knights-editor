@@ -3,7 +3,7 @@
 import copy
 import re
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Callable, Optional
 
 
 @dataclass
@@ -251,6 +251,24 @@ def _room_fits(room: Room, width: int, height: int) -> bool:
 
 
 @dataclass
+class MapBlock:
+    """A rectangular area cut or copied from a segment (see
+    Segment.extract), ready to be pasted into a segment (Segment.paste).
+
+    Positions are relative to the block's top-left tile, in the same
+    conventions as a Segment: switches in data tile coords, rooms in
+    room coords (offset by one). A block may extend onto a segment's
+    outer wall ring, which has no tile data: such tiles are None and
+    leave the destination tile untouched when pasted.
+    """
+    width: int
+    height: int
+    tiles: list[list[int | None]]  # tiles[row][col]
+    switches: list[Switch] = field(default_factory=list)
+    rooms: list[Room] = field(default_factory=list)
+
+
+@dataclass
 class Segment:
     """A map segment (room) containing a grid of tile numbers."""
     name: str
@@ -282,3 +300,85 @@ class Segment:
         return Segment(self.name, width, height, data, rooms, switches,
                        source_file=self.source_file,
                        source_index=self.source_index)
+
+    # --- Rectangular cut/copy/paste (see MapBlock) ---
+    #
+    # Rectangles are given in data tile coords (col, row, w, h) and may
+    # extend onto the outer wall ring (col/row of -1, or width/height).
+
+    def _in_data(self, col: int, row: int) -> bool:
+        return 0 <= col < self.width and 0 <= row < self.height
+
+    def _rooms_within(self, col: int, row: int, w: int, h: int) -> list[Room]:
+        """The rooms lying entirely inside the rectangle (walls included),
+        which is what a cut or copy of it takes with it."""
+        # Room coords are data coords + 1, so the rectangle spans room
+        # coords col+1 .. col+w (and likewise for rows).
+        return [r for r in self.rooms
+                if r.x >= col + 1 and r.x + r.w - 1 <= col + w
+                and r.y >= row + 1 and r.y + r.h - 1 <= row + h]
+
+    def extract(self, col: int, row: int, w: int, h: int) -> MapBlock:
+        """A copy of the rectangle's tiles, together with the switches on
+        them and the rooms lying entirely inside it. The segment is not
+        changed."""
+        tiles = [[self.data[r][c] if self._in_data(c, r) else None
+                  for c in range(col, col + w)]
+                 for r in range(row, row + h)]
+        switches = []
+        for sw in self.switches:
+            if col <= sw.x < col + w and row <= sw.y < row + h:
+                sw = copy.deepcopy(sw)
+                sw.x -= col
+                sw.y -= row
+                sw.rebuild_raw_text()
+                switches.append(sw)
+        rooms = [Room(r.x - col, r.y - row, r.w, r.h)
+                 for r in self._rooms_within(col, row, w, h)]
+        return MapBlock(w, h, tiles, switches, rooms)
+
+    def clear_rect(self, col: int, row: int, w: int, h: int, fill: int):
+        """Set the rectangle's tiles to `fill`, and remove the switches on
+        them and the rooms lying entirely inside it (i.e. everything that
+        extract() of the same rectangle returns)."""
+        for r in range(max(row, 0), min(row + h, self.height)):
+            for c in range(max(col, 0), min(col + w, self.width)):
+                self.data[r][c] = fill
+        self.switches = [sw for sw in self.switches
+                         if not (col <= sw.x < col + w and row <= sw.y < row + h)]
+        removed = self._rooms_within(col, row, w, h)
+        self.rooms = [r for r in self.rooms if not any(r is x for x in removed)]
+
+    def paste(self, block: MapBlock, col: int, row: int,
+              room_conflict: Callable[[Room, Room], bool] | None = None):
+        """Paste `block` with its top-left tile at (col, row). Parts that
+        fall outside the segment are dropped: tiles and switches off the
+        data area, and rooms not fitting within the segment plus its
+        wall ring. Existing switches on the overwritten tiles are
+        replaced by the block's. Existing rooms for which
+        `room_conflict(existing, pasted)` is true for some pasted room
+        are removed (all existing rooms are kept if it is None)."""
+        overwritten: set[tuple[int, int]] = set()
+        for r, tile_row in enumerate(block.tiles):
+            for c, tile in enumerate(tile_row):
+                dc, dr = col + c, row + r
+                if tile is not None and self._in_data(dc, dr):
+                    self.data[dr][dc] = tile
+                    overwritten.add((dc, dr))
+
+        self.switches = [sw for sw in self.switches
+                         if (sw.x, sw.y) not in overwritten]
+        for sw in block.switches:
+            if self._in_data(sw.x + col, sw.y + row):
+                sw = copy.deepcopy(sw)
+                sw.x += col
+                sw.y += row
+                sw.rebuild_raw_text()
+                self.switches.append(sw)
+
+        rooms = [Room(r.x + col, r.y + row, r.w, r.h) for r in block.rooms]
+        rooms = [r for r in rooms if _room_fits(r, self.width, self.height)]
+        if room_conflict is not None:
+            self.rooms = [r for r in self.rooms
+                          if not any(room_conflict(r, n) for n in rooms)]
+        self.rooms.extend(rooms)
