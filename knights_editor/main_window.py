@@ -22,7 +22,7 @@ from knights_editor.text_files import NotUtf8Error
 from knights_editor.graphics_cache import GraphicsCache
 from knights_editor.mod_loader import (ModLoader, parse_lua_error, discover_load_order,
                         list_installed_modules, modules_search_path,
-                        game_modules_dirs, find_module_dir)
+                        find_module_dir)
 from knights_editor.lua_state_widget import LuaStateWidget
 from knights_editor.load_order_dialog import LoadOrderDialog
 from knights_editor.settings_dialog import SettingsDialog
@@ -1683,13 +1683,11 @@ class MainWindow(QMainWindow):
                 f"Could not set up the test module:\n\n{e}")
             return
 
-        # The game searches the same directories, in the same order, as
-        # the editor did (the edited mod's own parent directory first).
+        # The game loads each module from the same directory the editor
+        # loaded it from.
         command = build_command(binary, knights_data, temp_dir,
                                 self.mod_loader.load_order,
-                                game_modules_dirs(knights_data,
-                                                  config.get_extra_modules_dirs(),
-                                                  self.mod_dir))
+                                self.mod_loader.get_mod_dirs())
         run = SegmentTestRun(command, temp_dir, self)
         run.finished.connect(
             lambda ok, message, run=run:

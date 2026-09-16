@@ -4,9 +4,11 @@ The editor copies the two template modules in segtest_template/ to a
 temporary modules directory, filling in @@MARKERS@@ in their Lua, and
 runs the game with
 
-    knights -d <knights_data> -w -a --modules-dir <tmpdir>
-            [--modules-dir <additional modules dir>]...
-            --modules ktseditor_segtest_hook,<editor load order>,ktseditor_segtest
+    knights -d <knights_data> -w -a
+            --module-dir <tmpdir>/ktseditor_segtest_hook
+            [--module-dir <directory of each mod in the editor load order>]...
+            --module-dir <tmpdir>/ktseditor_segtest
+            --load-modules ktseditor_segtest_hook,<editor load order>,ktseditor_segtest
 
 The hook module (loaded first) records every kts.LoadSegments call; the
 test module (loaded last) picks out the segments file under test - with
@@ -137,23 +139,27 @@ def write_test_modules(dest_dir: str, params: SegtestParams):
 
 
 def build_command(binary: str, knights_data: str, modules_dir: str,
-                  load_order: list[str], extra_modules_dirs=()) -> list[str]:
+                  load_order: list[str], mod_dirs: dict[str, str]) -> list[str]:
     """The command line for a test run. `modules_dir` is the directory
     holding the generated test modules; `load_order` is the editor's
     module load order, which the test modules are wrapped around;
-    `extra_modules_dirs` are the modules directories the editor searched
-    besides knights_data/modules (see mod_loader.game_modules_dirs: the
-    edited mod's parent directory, then the configured additional
-    directories), passed as further --modules-dir options in that order
-    after the test modules directory, so the game resolves module names
-    exactly as the editor did."""
+    `mod_dirs` maps each mod name in the load order to the directory
+    the editor loaded it from (see ModLoader.get_mod_dirs).
+
+    Every module is passed to the game as its own --module-dir option,
+    in load order, so the game loads exactly the directories the editor
+    did. A mod missing from `mod_dirs` gets no --module-dir option and
+    is left for the game to find in <knights_data>/modules."""
     mods = [HOOK_MODULE] + [n for n in load_order
                             if n not in (HOOK_MODULE, TEST_MODULE)] + [TEST_MODULE]
-    command = [binary, "-d", knights_data, "-w", "-a",
-               "--modules-dir", modules_dir]
-    for extra in extra_modules_dirs:
-        command += ["--modules-dir", extra]
-    return command + ["--modules", ",".join(mods)]
+    dirs = dict(mod_dirs)
+    dirs[HOOK_MODULE] = os.path.join(modules_dir, HOOK_MODULE)
+    dirs[TEST_MODULE] = os.path.join(modules_dir, TEST_MODULE)
+    command = [binary, "-d", knights_data, "-w", "-a"]
+    for name in mods:
+        if name in dirs:
+            command += ["--module-dir", dirs[name]]
+    return command + ["--load-modules", ",".join(mods)]
 
 
 class SegmentTestRun(QObject):
@@ -208,11 +214,11 @@ class SegmentTestRun(QObject):
                          + output)
         elif output.startswith("Usage:"):
             # The game prints its usage and exits 0 for an unknown
-            # option: most likely an older build without --modules-dir
-            # and --modules.
+            # option: most likely an older build without --module-dir
+            # and --load-modules.
             self._finish(False, "Knights did not accept the command line. "
                          "The configured executable may be too old to "
-                         "support the --modules-dir and --modules options "
+                         "support the --module-dir and --load-modules options "
                          "(see File > Settings).\n\n"
                          + " ".join(self.command) + "\n\n" + output)
         else:

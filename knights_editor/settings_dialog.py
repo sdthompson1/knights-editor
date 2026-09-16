@@ -10,10 +10,11 @@ Edits the editor-wide preferences from config.py:
   looked up by name (require, mod.GetRegisteredMod, the module load
   order) the directory containing the mod being edited is searched
   first, then these in order, then knights_data/modules (see
-  mod_loader.modules_search_path); Test Segment passes the same
-  directories to the game as --modules-dir options so it searches the
-  same way. So these only need configuring when dependencies live
-  somewhere other than alongside the mod being edited.
+  mod_loader.modules_search_path); Test Segment passes the directory
+  each mod was found in to the game as a --module-dir option, so the
+  game loads the same mods. So these only need configuring when
+  dependencies live somewhere other than alongside the mod being
+  edited.
 """
 
 import os
@@ -242,9 +243,7 @@ class SettingsDialog(QDialog):
                          "found; Test Segment will not work until it is.")
         for d in self.extra_modules_dirs():
             if not os.path.isdir(d):
-                lines.append(f"Modules directory <b>{d}</b> does not exist "
-                             "(the game refuses to start if a --modules-dir "
-                             "is missing).")
+                lines.append(f"Modules directory <b>{d}</b> does not exist.")
         if not lines:
             return "No problems detected."
         return "<br>".join(lines)

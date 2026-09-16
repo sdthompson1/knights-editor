@@ -455,7 +455,7 @@ def modules_search_path(knights_data_dir: str, extra_modules_dirs=(),
       anything;
     - the configured additional modules directories, in order;
     - <knights_data>/modules, always last (so editing an installed mod
-      searches exactly as the game does with --modules-dir).
+      finds the same modules the game does).
 
     Duplicates are dropped, keeping the earliest position."""
     installed = os.path.join(knights_data_dir, "modules")
@@ -470,14 +470,6 @@ def modules_search_path(knights_data_dir: str, extra_modules_dirs=(),
             seen.add(key)
             result.append(d)
     return result + [installed]
-
-
-def game_modules_dirs(knights_data_dir: str, extra_modules_dirs=(),
-                      mod_dir: str | None = None) -> list[str]:
-    """The --modules-dir options for a game run: the modules search
-    path (see modules_search_path) without <knights_data>/modules,
-    which the game adds itself, after them, from its -d option."""
-    return modules_search_path(knights_data_dir, extra_modules_dirs, mod_dir)[:-1]
 
 
 def find_module_dir(name: str, modules_dirs: list[str]) -> str | None:
@@ -623,8 +615,9 @@ class ModLoader:
       Used by discover_load_order() to infer a load order.
 
     Mods are looked up by name in `extra_modules_dirs` (in order) and
-    then <knights_data>/modules, the first match winning - the same
-    search the game does with --modules-dir options.
+    then <knights_data>/modules, the first match winning. Test Segment
+    then passes the directory each mod was found in to the game as a
+    --module-dir option, so the game loads the same mods.
     """
 
     def __init__(self, knights_data_dir: str, on_demand: bool = False,

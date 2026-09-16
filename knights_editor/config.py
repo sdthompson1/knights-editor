@@ -54,7 +54,8 @@ def get_extra_modules_dirs() -> list[str]:
     """Additional modules directories, in search order. Each is a
     directory containing mod subfolders (like knights_data/modules) and
     is searched before knights_data/modules when a mod is looked up by
-    name; they are passed to the game as --modules-dir options."""
+    name. Test Segment passes the directory each mod was found in to
+    the game as a --module-dir option."""
     return _read_str_list("extra_modules_dirs")
 
 
