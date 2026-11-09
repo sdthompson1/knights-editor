@@ -26,14 +26,20 @@ class LoadOrderDialog(QDialog):
     After exec() returns Accepted, result_order() gives the chosen
     order: None for automatic inference, otherwise the enabled mod names
     in load order (always including the edited mod).
+
+    Mods are identified throughout by directory name; `declared_names`
+    (directory name -> name passed to mod.RegisterMod) is only used to
+    label them in the list.
     """
 
     def __init__(self, parent, mod_name: str, installed: list[str],
+                 declared_names: dict[str, str],
                  discovery: Discovery, saved: list[str] | None):
         super().__init__(parent)
         self.setWindowTitle("Module Load Order")
         self._mod_name = mod_name
         self._installed = list(installed)
+        self._declared_names = dict(declared_names)
         self._discovery = discovery
         self._result: list[str] | None = None
 
@@ -101,20 +107,27 @@ class LoadOrderDialog(QDialog):
 
     # --- list contents -------------------------------------------------
 
+    def _label(self, name: str) -> str:
+        """How the mod in directory `name` is shown in the list: its
+        declared name, then the directory name if that is different."""
+        declared = self._declared_names.get(name, name)
+        return declared if declared == name else f"{declared} ({name})"
+
     def _add_item(self, name: str, enabled: bool):
+        label = self._label(name)
         item = QListWidgetItem()
         item.setData(Qt.ItemDataRole.UserRole, name)
         flags = (Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsEnabled
                  | Qt.ItemFlag.ItemIsDragEnabled)
         if name == self._mod_name:
             # Always loaded; only its position can change.
-            item.setText(f"{name}  (this mod)")
+            item.setText(f"{label}  (this mod)")
             item.setCheckState(Qt.CheckState.Checked)
         elif name not in self._installed:
-            item.setText(f"{name}  (not installed)")
+            item.setText(f"{label}  (not installed)")
             item.setCheckState(Qt.CheckState.Unchecked)
         else:
-            item.setText(name)
+            item.setText(label)
             flags |= Qt.ItemFlag.ItemIsUserCheckable
             item.setCheckState(Qt.CheckState.Checked if enabled
                                else Qt.CheckState.Unchecked)
@@ -136,7 +149,7 @@ class LoadOrderDialog(QDialog):
         if self._mod_name not in seen:
             seen.add(self._mod_name)
             self._add_item(self._mod_name, True)
-        for name in self._installed:
+        for name in sorted(self._installed, key=self._label):
             if name not in seen:
                 self._add_item(name, False)
         self.list.blockSignals(False)

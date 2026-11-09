@@ -22,7 +22,7 @@ from knights_editor.text_files import NotUtf8Error
 from knights_editor.graphics_cache import GraphicsCache
 from knights_editor.mod_loader import (ModLoader, parse_lua_error, discover_load_order,
                         list_installed_modules, modules_search_path,
-                        find_module_dir)
+                        find_module_dir, scan_declared_mod_names)
 from knights_editor.lua_state_widget import LuaStateWidget
 from knights_editor.load_order_dialog import LoadOrderDialog
 from knights_editor.settings_dialog import SettingsDialog
@@ -865,8 +865,11 @@ class MainWindow(QMainWindow):
         extra_dirs = config.get_extra_modules_dirs()
         discovery = discover_load_order(knights_data, self.mod_dir, extra_dirs)
         installed = list_installed_modules(knights_data, extra_dirs, self.mod_dir)
+        declared_names = scan_declared_mod_names(
+            modules_search_path(knights_data, extra_dirs, self.mod_dir))
         saved = config.get_mod_load_order(self.mod_dir)
-        dlg = LoadOrderDialog(self, mod_name, installed, discovery, saved)
+        dlg = LoadOrderDialog(self, mod_name, installed, declared_names,
+                              discovery, saved)
         if dlg.exec() != QDialog.DialogCode.Accepted:
             return
         chosen = dlg.result_order()

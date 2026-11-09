@@ -11,7 +11,7 @@ import lupa
 from lupa import LuaRuntime
 from knights_editor.models import Graphic, TileInfo, TileEntry
 from knights_editor.segment_io import load_segments as load_segments_from_file
-from knights_editor.text_files import read_bytes_as_text
+from knights_editor.text_files import NotUtf8Error, read_bytes_as_text
 
 
 # Matches "<path>.lua:<line>:" as Lua puts at the front of error messages
@@ -437,11 +437,11 @@ class KtsMonster(KtsObject):
 
 def is_valid_module_name(name: str) -> bool:
     """Whether `name` is a module name the game would accept (see the
-    game's IsValidModuleName): a letter followed by letters, digits or
-    underscores. Directories with other names are ignored by the game."""
-    if not name or not name[0].isalpha() or not name.isascii():
+    game's IsValidModuleName): one or more letters, digits, underscores
+    or hyphens. Directories with other names are ignored by the game."""
+    if not name or not name.isascii():
         return False
-    return all(c.isalnum() or c == '_' for c in name[1:])
+    return all(c.isalnum() or c in '_-' for c in name)
 
 
 def modules_search_path(knights_data_dir: str, extra_modules_dirs=(),
@@ -481,6 +481,69 @@ def find_module_dir(name: str, modules_dirs: list[str]) -> str | None:
         if os.path.isfile(os.path.join(mod_dir, "init.lua")):
             return mod_dir
     return None
+
+
+# Matches a Lua string literal (group 1) or comment, for blanking out the
+# comments. Strings have to be recognised so that a "--" inside one is
+# not taken for the start of a comment.
+_LUA_STRING_OR_COMMENT_RE = re.compile(r'''
+    ( "(?:\\.|[^"\\\n])*" | '(?:\\.|[^'\\\n])*' )
+    | --\[(=*)\[ .*? \]\2\]
+    | --[^\n]*
+''', re.VERBOSE | re.DOTALL)
+
+# Matches a mod.RegisterMod call whose config table has a literal name;
+# the name is group 1 or 2. Run over a whole file, so the call may be
+# split across lines.
+_REGISTER_MOD_RE = re.compile(r'''
+    \bmod \s*\.\s* RegisterMod \s* \(? \s* \{
+    [^}]*?
+    \bname \s*=\s* (?: "([^"\n]*)" | '([^'\n]*)' )
+''', re.VERBOSE)
+
+
+def _scan_declared_mod_name(init_file: str) -> str | None:
+    """The name `init_file` passes to mod.RegisterMod, judged from its
+    text alone (the file is not run), or None if no such call is found.
+
+    This assumes the call is in init.lua itself and has a literal name;
+    a mod that does otherwise simply isn't found."""
+    try:
+        source = read_bytes_as_text(init_file)
+    except (OSError, NotUtf8Error):
+        return None
+    source = _LUA_STRING_OR_COMMENT_RE.sub(
+        lambda m: m.group(1) or " ", source)
+    match = _REGISTER_MOD_RE.search(source)
+    if match is None:
+        return None
+    return match.group(1) or match.group(2)
+
+
+def scan_declared_mod_names(modules_dirs: list[str]) -> dict[str, str]:
+    """Map the directory name of each mod in `modules_dirs` to the name
+    it declares via mod.RegisterMod, in search order. A mod stored under
+    e.g. an ID number can then be found, or displayed, by that name.
+    Mods with no declaration that can be found are left out.
+
+    A directory shadowed by one of the same name earlier in
+    `modules_dirs` is skipped, as find_module_dir could never return it."""
+    declared = {}
+    seen = set()
+    for modules_dir in modules_dirs:
+        try:
+            entries = sorted(os.listdir(modules_dir))
+        except OSError:
+            continue
+        for entry in entries:
+            init_file = os.path.join(modules_dir, entry, "init.lua")
+            if entry in seen or not os.path.isfile(init_file):
+                continue
+            seen.add(entry)
+            name = _scan_declared_mod_name(init_file)
+            if name:
+                declared[entry] = name
+    return declared
 
 
 def list_installed_modules(knights_data_dir: str, extra_modules_dirs=(),
@@ -546,9 +609,11 @@ class Discovery:
     # Mod names in the order their init.lua finished loading. This is
     # the inferred load order: dependencies come before dependents.
     order: list[str]
-    # mod name -> names it passed to require(), in call order
+    # Mod name -> the mods it passed to require(), in call order. All
+    # mod names here and in `optional` are directory names, as in `order`
+    # (a dependency not found on disk keeps the name it was asked for by).
     required: dict[str, list[str]]
-    # mod name -> names it passed to mod.GetRegisteredMod(), in call order
+    # mod name -> the mods it passed to mod.GetRegisteredMod(), in call order
     optional: dict[str, list[str]]
     # The exception that stopped the load, if any. `order` is then
     # partial (mods that finished before the error).
@@ -651,6 +716,10 @@ class ModLoader:
         # dir name -> names it declared via RegisterMod, so a mod whose
         # init.lua then fails can be removed from the registry again.
         self._declared_by: dict[str, list[str]] = {}
+        # On-demand mode only: declared name -> dir name, from scanning
+        # the modules search path (built when first needed; see
+        # _on_demand_dir_name).
+        self._scanned_names: dict[str, str] | None = None
         # On-demand mode only: installed optional dependencies whose
         # loading failed, with the exception. Treated as absent
         # thereafter (see the optional_lookup stub).
@@ -1028,15 +1097,16 @@ class ModLoader:
             if not isinstance(name, str):
                 raise RuntimeError(f"mod.{api}: arg 1 must be a string")
             loader._record_dependency(name, optional=True)
-            if (loader.on_demand
-                    and name not in loader._registered_mods
-                    and name not in loader.failed_optional
-                    and name not in loader._loading
-                    and loader.find_module_dir(name) is not None):
+            if not loader.on_demand or name in loader._registered_mods:
+                return
+            dir_name = loader._on_demand_dir_name(name)
+            if (dir_name not in loader.failed_optional
+                    and dir_name not in loader._loading
+                    and loader.find_module_dir(dir_name) is not None):
                 try:
-                    loader.load_mod(name)
+                    loader.load_mod(dir_name)
                 except Exception as e:
-                    loader.failed_optional[name] = e
+                    loader.failed_optional[dir_name] = e
                     # The failing mod recorded the loading stack; that
                     # is not the error of the load in progress.
                     loader.error_stack = None
@@ -1157,13 +1227,15 @@ class ModLoader:
                 raise RuntimeError(
                     f"require: mod '{name}' is not registered (it must be "
                     f"enabled, and come earlier, in the module load order)")
-            if loader.find_module_dir(name) is None:
+            dir_name = loader._on_demand_dir_name(name)
+            if loader.find_module_dir(dir_name) is None:
                 raise RuntimeError(
                     f"Module '{name}' not found "
                     f"({loader._describe_missing_module(name)})")
-            ns = loader.load_mod(name)
+            loader.load_mod(dir_name)
+            ns = loader._registered_mods.get(name)
             if ns is None:
-                # Loaded, but its init.lua never called mod.RegisterMod
+                # Loaded, but it didn't call mod.RegisterMod with this name
                 raise RuntimeError(f"require: mod '{name}' is not registered")
             return ns
         g['require'] = lua_require
@@ -1283,6 +1355,9 @@ class ModLoader:
         require() (optional=False) or mod.GetRegisteredMod()."""
         if self._current_mod_name is None:
             return
+        if self.on_demand:
+            # Edges are compared with load orders, which hold dir names
+            name = self._on_demand_dir_name(name)
         edges = self.optional_mods if optional else self.required_mods
         lst = edges.setdefault(self._current_mod_name, [])
         if name not in lst:
@@ -1318,6 +1393,18 @@ class ModLoader:
         """Directory of the installed mod `mod_name` (first match in the
         modules search path), or None if it isn't installed."""
         return find_module_dir(mod_name, self.modules_dirs)
+
+    def _on_demand_dir_name(self, name: str) -> str:
+        """The directory name of the mod that a require() or similar of
+        `name` refers to: the mod that declares `name` if the scan finds
+        one, otherwise a directory called `name`."""
+        if self._scanned_names is None:
+            self._scanned_names = {}
+            for dir_name, declared in scan_declared_mod_names(
+                    self.modules_dirs).items():
+                # The first declaration in search order wins
+                self._scanned_names.setdefault(declared, dir_name)
+        return self._scanned_names.get(name, name)
 
     def resolve_path(self, filename: str) -> str:
         """The file a name in mod Lua (dofile, kts.Graphic, kts.Sound,
