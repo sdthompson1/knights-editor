@@ -48,10 +48,19 @@ class LoadOrderDialog(QDialog):
         intro = QLabel(
             f"Choose which installed modules are loaded along with "
             f"<b>{mod_name}</b>, and in what order (like the game's "
-            f"'Mods' dialog). Modules load from top to bottom; require() "
-            f"and mod.GetRegisteredMod() only see modules loaded earlier.")
+            f"\"Mods\" dialog). Modules load from top to bottom; require() "
+            f"and mod.GetRegisteredMod() only see modules loaded earlier."
+        )
         intro.setWordWrap(True)
         layout.addWidget(intro)
+
+        intro2 = QLabel(
+            f"If the module you are looking for doesn't appear below, then go "
+            f"to File > Settings and add its parent folder to \"Additional "
+            f"modules directories\"."
+        )
+        intro2.setWordWrap(True)
+        layout.addWidget(intro2)
 
         self.auto_check = QCheckBox(
             "Infer the load order automatically from require() and "
