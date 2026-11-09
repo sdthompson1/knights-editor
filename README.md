@@ -57,7 +57,7 @@ click Open.
 For example, you could try opening "knights_data/modules/base", which
 will enable you to view all of the Lua scripts, graphics, dungeon
 rooms etc. that are part of the "base" module that is shipped with the
-game.
+game (and is the basis for all other mods).
 
 If you get an error saying something like "require: module 'foo' is
 not registered ... Tile graphics may be missing or incomplete", this
@@ -100,7 +100,7 @@ the screen). Clicking this will open a view of every Lua object
 is a tree view, so you can open tables to inspect their contents.
 Clicking on any particular object shows a properties panel. For
 example, we can inspect the properties of `t_barrel` (the "barrel"
-tile) as follows:
+tile) as follows (see bottom left of the screenshot):
 
 ![Knights Editor screenshot, showing Lua tree view open at the
  "barrel" tile on the left, and the text of "init.lua" on the
@@ -119,15 +119,16 @@ documentation](https://www.knightsgame.org.uk/lua/LayoutDungeon) for a
 full description). A segment is basically a pre-made 12x12 area of the
 dungeon, divided up into individual rooms. The Knights dungeon
 generator works by laying out one or more of these segments next to
-each other, to form a dungeon layout.
+each other, to form a complete dungeon.
 
 A "segments file" contains multiple segments, each with its own name.
 The name is not shown anywhere in-game and is only used within the
 editor. (The segments that come with the game have simple alphanumeric
 names like "A01.2" or "Z03.3".) The list of segments can be seen to
-the left-hand side of the dungeon view area. Double click a segment to
-open it; drag a segment to change its position in the list;
-right-click to add, delete or duplicate an existing segment.
+the left-hand side of the dungeon view area (see screenshot below).
+Double click a segment to open it; drag a segment to change its
+position in the list; right-click to add, delete or duplicate an
+existing segment.
 
 The right-hand side of the screen also has a "Segment Properties"
 area. You can rename a segment by editing the Name, or resize it by
@@ -255,6 +256,31 @@ see how the gnome book segments are added to the dungeon when a Tome
 of Gnomes quest is selected).
 
 
+### Tile palette
+
+The tile palette (set of tiles available for editing) is defined by
+the first argument to the `kts.LoadSegments` Lua call, in the mod's
+Lua code. (For the base module, this is always the table called
+`tile_table` set up in `segments.lua`. For other mods, it might be
+something different.)
+
+If you edit the tile table, reload the mod (F5, or File -> Reload Mod)
+to update the tile palette in the editor.
+
+If you create an entirely new segments file, or you open a segments
+file that doesn't yet have a corresponding `kts.LoadSegments` call in
+the Lua code, then the editor will try to guess a suitable tile table
+to use for the tile palette, based on either the first parameter to
+any other `kts.LoadSegments` call it can find, or (if all else fails)
+a global variable called `tile_table` defined by any loaded mod. If
+this doesn't produce the results you want, you can always paste a
+suitable `kts.LoadSegments` into your mod's Lua code, with your
+preferred tile table as the first argument, and then reload the mod.
+
+See also the [kts.LoadSegments
+documentation](https://www.knightsgame.org.uk/lua/LoadSegments).
+
+
 ## Mod Dependencies
 
 Upon opening a mod, the editor will run the mod's Lua scripts (within
@@ -288,12 +314,12 @@ the mod name by concatenating strings, or something like that), then
 the search should work fine and the mod should be recognised.
 
 Note also that the game and editor will only recognise mod folders
-whose names include only alphanumeric characters (a-z, A-Z, 0-9), dots
-("."), hyphens ("-") or underscores ("_").
+whose names consist *only* of alphanumeric characters (a-z, A-Z, 0-9),
+dots ("."), hyphens ("-") or underscores ("_").
 
 Sometimes the automatic dependency search doesn't work as expected, or
 puts the mods into the wrong load order. In these cases, you can fix
-the problem as follows:
+the problem manually:
  - Go to File -> Module Load Order
  - Turn off the checkbox marked "Infer load order automatically"
  - The list box shows all modules that were found by the above
