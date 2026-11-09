@@ -6,19 +6,10 @@ A tool for creating and editing mods for
 
 ## What this does
 
-Knights mods are composed of Lua scripts plus various additional data
-files, including graphics, sounds, dungeon "segments" (which are the
-map pieces the game uses to generate dungeons), and localized text
-files (in one or more languages).
-
-The Knights Mod Editor tool provides various features for editing
-these files. It can be used either on its own, or in conjunction with
-other tools such as code editors or paint programs.
-
 The Knights Mod Editor allows you to:
  - Open a Knights mod
  - View and edit the mod's Lua scripts
- - Edit dungeon segments:
+ - Edit dungeon maps ("segments"):
     - Create new dungeon rooms, or edit existing ones
     - Set up switch actions (switches can open/close doors, shoot
       bolts, or run custom Lua functions)
@@ -27,6 +18,12 @@ The Knights Mod Editor allows you to:
     - This includes a Properties panel, which allows you to preview
       the mod's graphics, animations and sounds, as they will appear in
       the game
+
+You don't *have* to use this tool to create Knights mods -- it's
+perfectly possible to create mods using other tools (such as VS Code
+for Lua script editing, MS Paint for graphics, etc.) -- but this tool
+does have some unique capabilities that you won't find elsewhere (such
+as editing dungeon maps), so it might be useful for those purposes.
 
 
 ## Requirements
@@ -51,9 +48,9 @@ necessary.
 
 ## Opening a mod
 
-Use Open Mod, from the File menu, to open a mod. You will need to
-navigate to the directory of your mod (i.e. the folder containing
-`init.lua`), then click Open.
+Use File -> Open Mod to open a mod. You will need to navigate to the
+directory of your mod (i.e. the folder containing `init.lua`), then
+click Open.
 
 For example, you could try opening the "base" mod (navigate to
 "knights_data/modules/base" in your Knights installation -- found
@@ -61,47 +58,11 @@ under "steamapps/common/Knights" if you are using Steam), which will
 enable you to view all of the Lua scripts, graphics, dungeon rooms
 etc. that are part of the "base" module that comes with the game.
 
-Upon opening a mod, the editor will run the mod's Lua scripts (within
-a sandboxed Lua environment). This includes loading any dependencies
-imported via `require` (or similar). This means that the editor needs
-to be able to find those dependencies. By default, the editor searches
-automatically for dependencies in both the parent directory of your
-mod's directory (in case you have other mods in "sibling" directories
-of the loaded mod), and also in `knights_data/modules` (so that the
-`base` module can be found). You can add additional search paths by
-going to File -> Settings and editing "Additional modules
-directories".
-
-The automatic dependency search works by looking for `init.lua` files
-and then scanning their text for `mod.RegisterMod` calls. This scan
-uses a text regex search, rather than running the `init.lua` code
-directly, but as long as the `mod.RegisterMod` calls are written in a
-standard way (e.g., the code isn't computing the mod name by
-concatenating strings, or something like that), then the search should
-work fine and the mod should be recognised.
-
-If, when opening a mod, you get an error saying something like
-"require: module 'foo' is not registered ... Tile graphics may be
-missing or incomplete", this means that the automatic dependency
-search process (as described above) did not succeed, and the
-dependency `foo` wasn't found. To fix this problem, go to File ->
-Module Load Order and make sure that all dependencies are enabled and
-the order is correct. If necessary, you can turn off the "Infer load
-order automatically" check box, and then set up the mod load order
-manually, by enabling and disabling mods, and changing their order, as
-needed (this works like the "Mods" dialog in the game). (Generally,
-you want to put the mod you are editing at the bottom of the list,
-after all of its dependencies.) If a dependency isn't shown in the
-list, go to File -> Settings and add its parent directory to the
-"Additional modules directories" list. (If it still doesn't show up,
-check that `init.lua` for that mod contains a valid `mod.RegisterMod`
-call.)
-
-Note: If the mod you are editing has dependencies on Steam Workshop
-mods, then adding the Knights Workshop directory
-("steamapps/workshop/content/4146180" under your Steam installation)
-to "Additional modules directories" (on File -> Settings) will enable
-the editor to find those dependencies.
+If you get an error saying something like "require: module 'foo' is
+not registered ... Tile graphics may be missing or incomplete", this
+means the mod editor was not able to find all the Lua dependencies of
+your mod. See "Mod Dependencies" below for more information about
+this.
 
 
 ## Editor main screen
@@ -292,6 +253,102 @@ for inspiration (e.g. search for "gnome_rooms" in the base module, to
 see how the gnome book segments are added to the dungeon when a Tome
 of Gnomes quest is selected).
 
+
+## Mod Dependencies
+
+Upon opening a mod, the editor will run the mod's Lua scripts (within
+a sandboxed Lua environment). If the mod depends on other mods (via
+`require`, `mod.GetRegisteredMod`, or similar), then the editor needs
+to be able to find and run all of those dependencies as well.
+
+By default, the search path for dependencies includes:
+ - the "knights_data/modules" folder (this allows mods to use the 
+   "base" module from the original game, without any additional
+   setup);
+ - the parent directory of the mod being loaded (e.g. if you are
+   loading a mod from "C:\my_mods\more_zombies", then "C:\my_mods" is
+   automatically in the search path);
+ - any "Additional modules directories" added in File -> Settings.
+
+The automatic dependency search works by looking for `init.lua` files
+in all subfolders of the search path(s), and then scanning their text
+for `mod.RegisterMod` calls. For example, if "C:\knights_mods" is an
+"Additional modules directory", and "C:\knights_mods\toolbox\init.lua"
+exists, and it contains `mod.RegisterMod{ name = "toolbox", version =
+"1.0" }`, then the editor would resolve any `require("toolbox")` call
+to the mod found in "C:\knights_mods\toolbox\". (Note that the name
+that appears in the `require` and `mod.RegisterMod` calls doesn't
+necessarily need to be the same as the folder name.)
+
+The scan of `init.lua` uses a text regex search, rather than running
+the `init.lua` code directly, but as long as the `mod.RegisterMod`
+calls are written in a standard way (e.g., the code isn't computing
+the mod name by concatenating strings, or something like that), then
+the search should work fine and the mod should be recognised.
+
+Note also that the game and editor will only recognise mod folders
+whose names include only alphanumeric characters (a-z, A-Z, 0-9), dots
+("."), hyphens ("-") or underscores ("_").
+
+Sometimes the automatic dependency search doesn't work as expected, or
+puts the mods into the wrong load order. In these cases, you can fix
+the problem as follows:
+ - Go to File -> Module Load Order
+ - Turn off the checkbox marked "Infer load order automatically"
+ - The list box shows all modules that were found by the above
+   scanning process; you can enable and disable them, and move them up
+   and down in the load order, just like in the "Mods" dialog in the
+   game itself.
+
+Note: You might want to add the Knights Steam Workshop content folder 
+("steamapps/workshop/content/4146180" under your Steam installation)
+to "Additional modules directories" (on File -> Settings) -- this will
+allow you to edit mods that have dependencies on things that you have
+downloaded from Steam Workshop.
+
+
+## Creating a new mod
+
+Currently, the tool does not allow you to create a new mod completely
+from scratch. You will need to create a mod directory, and write at
+least a minimal "init.lua" yourself, before you will be able to open
+the mod in the editor tool.
+
+While working on your own mods, you might want to put them in
+"knights_data/modules" so that the game can find them easily (without
+special command line options being needed). This will also allow you
+to upload to Steam Workshop (see next section).
+
+
+## Uploading to Steam Workshop
+
+If you want to upload a mod of your own to Steam Workshop, this can
+only be done in the game (not from the editor tool) currently.
+
+To upload a mod:
+ - Place the mod in the "knights_data/modules" directory, in a folder
+   of its own, alongside "base" and "tutorial".
+ - Create a preview image for Steam Workshop and save it as
+   "preview.png", "preview.jpg", "preview.jpeg" or "preview.gif". This
+   file must be 1 MB or less in size.
+ - Start Knights and go to "Mods" from the main menu, then click
+   "Upload Mod".
+ - Select your mod from the list and click "Upload". (If it doesn't
+   appear, check that you put it in the right folder, and that your
+   mod's folder name only contains letters a-z or A-Z, numbers 0-9,
+   hyphens, underscores or dots.)
+ - The first time you upload a new mod, a new Workshop item will be
+   created (set to "private" visibility initially), and a file
+   "workshop_item_id.txt" will be created in your mod's directory,
+   containing the Workshop item ID number. (This file, and the preview
+   image, will not form part of the upload.) Once the upload is
+   complete, you can go to Steam Workshop itself to edit the mod title
+   and other properties, and set the item to public visibility when
+   you are ready.
+ - On the second or subsequent uploads, the game will read the item ID
+   number from "workshop_item_id.txt", and will update the existing
+   Workshop item with that ID number. This is how you can make updates
+   to your existing mods.
 
 
 ## Contact
