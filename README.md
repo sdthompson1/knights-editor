@@ -39,11 +39,13 @@ dependencies (PySide6 and lupa).
 
 Then, run `python -m knights_editor` to open the editor.
 
-On first run, the editor will ask you to set your `knights_data`
-directory, and also (optionally) the location of the Knights
-executable (the latter is needed for testing edited map segments in
-the game). These can be changed later by going to File -> Settings, if
-necessary.
+On first run, the editor will ask you to input your `knights_data`
+directory and the location of the Knights executable. (If you
+installed Knights via Steam, look for these in
+"steamapps/common/Knights" under your Steam folder, which is usually
+"C:\Program Files (x86)\Steam\" on Windows or "~/.steam/steam" on
+Linux.) These settings can be changed later by going to File ->
+Settings, if necessary.
 
 
 ## Opening a mod
@@ -52,11 +54,10 @@ Use File -> Open Mod to open a mod. You will need to navigate to the
 directory of your mod (i.e. the folder containing `init.lua`), then
 click Open.
 
-For example, you could try opening the "base" mod (navigate to
-"knights_data/modules/base" in your Knights installation -- found
-under "steamapps/common/Knights" if you are using Steam), which will
-enable you to view all of the Lua scripts, graphics, dungeon rooms
-etc. that are part of the "base" module that comes with the game.
+For example, you could try opening "knights_data/modules/base", which
+will enable you to view all of the Lua scripts, graphics, dungeon
+rooms etc. that are part of the "base" module that is shipped with the
+game.
 
 If you get an error saying something like "require: module 'foo' is
 not registered ... Tile graphics may be missing or incomplete", this
