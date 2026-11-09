@@ -258,24 +258,25 @@ of Gnomes quest is selected).
 
 ### Tile palette
 
-The tile palette (set of tiles available for editing) is defined by
-the first argument to the `kts.LoadSegments` Lua call, in the mod's
-Lua code. (For the base module, this is always the table called
-`tile_table` set up in `segments.lua`. For other mods, it might be
-something different.)
+The tile palette (set of tiles available for painting with) is defined
+by the first argument to the `kts.LoadSegments` Lua call corresponding
+to this segments file. (For the base module, this is always the table
+called `tile_table` created in `segments.lua`. For other mods, it
+might be something different.)
 
 If you edit the tile table, reload the mod (F5, or File -> Reload Mod)
 to update the tile palette in the editor.
 
 If you create an entirely new segments file, or you open a segments
-file that doesn't yet have a corresponding `kts.LoadSegments` call in
-the Lua code, then the editor will try to guess a suitable tile table
+file that doesn't have a corresponding `kts.LoadSegments` call in the
+Lua code yet, then the editor will try to guess a suitable tile table
 to use for the tile palette, based on either the first parameter to
-any other `kts.LoadSegments` call it can find, or (if all else fails)
-a global variable called `tile_table` defined by any loaded mod. If
-this doesn't produce the results you want, you can always paste a
-suitable `kts.LoadSegments` into your mod's Lua code, with your
-preferred tile table as the first argument, and then reload the mod.
+any other `kts.LoadSegments` call(s) it can find, or (if all else
+fails) a global variable called `tile_table` defined by any loaded
+mod. If this doesn't produce the results you want, you can always
+paste a suitable `kts.LoadSegments` into your mod's Lua code, with
+your preferred tile table as the first argument, and then reload the
+mod.
 
 See also the [kts.LoadSegments
 documentation](https://www.knightsgame.org.uk/lua/LoadSegments).
@@ -356,14 +357,14 @@ To upload a mod:
  - Place the mod in the "knights_data/modules" directory, in a folder
    of its own, alongside "base" and "tutorial".
  - Create a preview image for Steam Workshop and save it as
-   "preview.png", "preview.jpg", "preview.jpeg" or "preview.gif". This
-   file must be 1 MB or less in size.
+   "preview.png", "preview.jpg", "preview.jpeg" or "preview.gif" (in
+   your mod's directory). This file must be 1 MB or less in size.
  - Start Knights and go to "Mods" from the main menu, then click
    "Upload Mod".
- - Select your mod from the list and click "Upload". (If it doesn't
-   appear, check that you put it in the right folder, and that your
-   mod's folder name only contains letters a-z or A-Z, numbers 0-9,
-   hyphens, underscores or dots.)
+ - Select your mod from the list and click "Upload". (If your mod
+   doesn't appear, check that you put it in the right folder, and that
+   your mod's folder name only contains letters a-z or A-Z, numbers
+   0-9, hyphens, underscores or dots.)
  - The first time you upload a new mod, a new Workshop item will be
    created (set to "private" visibility initially), and a file
    "workshop_item_id.txt" will be created in your mod's directory,
