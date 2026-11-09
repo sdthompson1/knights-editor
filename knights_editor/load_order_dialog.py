@@ -48,7 +48,7 @@ class LoadOrderDialog(QDialog):
         intro = QLabel(
             f"Choose which installed modules are loaded along with "
             f"<b>{mod_name}</b>, and in what order (like the game's "
-            f"modules.txt). Modules load from top to bottom; require() "
+            f"'Mods' dialog). Modules load from top to bottom; require() "
             f"and mod.GetRegisteredMod() only see modules loaded earlier.")
         intro.setWordWrap(True)
         layout.addWidget(intro)

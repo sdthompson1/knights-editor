@@ -437,11 +437,11 @@ class KtsMonster(KtsObject):
 
 def is_valid_module_name(name: str) -> bool:
     """Whether `name` is a module name the game would accept (see the
-    game's IsValidModuleName): one or more letters, digits, underscores
-    or hyphens. Directories with other names are ignored by the game."""
+    game's IsValidModuleName): one or more letters, digits, underscores,
+    hyphens or dots. Directories with other names are ignored by the game."""
     if not name or not name.isascii():
         return False
-    return all(c.isalnum() or c in '_-' for c in name)
+    return all(c.isalnum() or c in '_-.' for c in name)
 
 
 def modules_search_path(knights_data_dir: str, extra_modules_dirs=(),
