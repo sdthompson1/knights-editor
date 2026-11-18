@@ -29,8 +29,8 @@ from enum import Enum, auto
 from knights_editor.models import Segment, Room, TileEntry, entry_standable
 
 # Largest room (including its edge squares) that the client can display
-# properly. These match the largest rooms in the shipped Knights data.
-MAX_ROOM_W = 10
+# properly.
+MAX_ROOM_W = 11
 MAX_ROOM_H = 11
 
 
